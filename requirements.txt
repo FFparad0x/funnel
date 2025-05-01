@@ -2,3 +2,4 @@ python-telegram-bot==20.8
 python-dotenv==1.0.1
 pyyaml==6.0.1
 openai==1.76.2 
+requests==2.32.3

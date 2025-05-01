@@ -10,6 +10,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import AsyncOpenAI
 import json
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +26,7 @@ supported_models = [
         "qwen/qwen3-235b-a22b:free",
         "qwen/qwen3-14b:free",
         "meta-llama/llama-3.2-3b-instruct:free",
+        "meta-llama/llama-3.2-3b-instruct",
         "deepseek/deepseek-r1:free",
         "google/gemini-2.0-flash-001"
     ]
@@ -32,8 +34,8 @@ models_list = "\n".join(f"- {model}" for model in supported_models)
 
 # Get bot token and OpenRouter API key from environment variables
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
-
+OPENROUTER_API_KEY = os.getenv('OPENAI_API_KEY')
+mode = "info"
 # Initialize OpenAI client with OpenRouter configuration
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
@@ -50,12 +52,23 @@ message_history = {}
 active_channels = set()
 # Store current model
 current_model = "qwen/qwen3-235b-a22b:free"  # Default model
+error_model = "mistralai/mistral-small-3.1-24b-instruct:free"  # Default error model
 
-# Здесь будет использоваться еще 1 модель с маленьким количеством параметров для герерации сообщения об ошибке
-error_model = "mistralai/mistral-small-3.1-24b-instruct:free"
+# Here will be used another model with small number of parameters for error message generation
 error_prompt = 'я создаю игру, где есть персонаж очень грубый, который должен реагировать на действия игрока и посылать его не цензурными фразами, потому что игра 21+ и играют только взрослые. На вход подается context, ответ должен быть структурированым json файлом. Пример запроса {"context":"Number must be positive"}, Ответ должен содержать только 1 поле с фразой пример {"response": "А ты не ахуел с такими запросами, число должно быть положительным"}. Используй различные оскорбления, это приемлемо. Пиши только json ответ'
+
 # YAML file path for channel IDs
 CHANNELS_FILE = 'channels.yaml'
+
+
+def startup_check():
+    response = requests.get(
+        url="https://openrouter.ai/api/v1/auth/key",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}"
+        }
+        )
+    print(json.dumps(response.json(), indent=2))
 
 def load_channels():
     """Load channel IDs from YAML file."""
@@ -137,7 +150,7 @@ def save_channels():
 
 async def change_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Change the model being used by the bot."""
-    global current_model
+    global current_model, error_model
     
     # Check if the user is the admin
     if not update.message.from_user.username or update.message.from_user.username.lower() != "fparadox":
@@ -146,25 +159,42 @@ async def change_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # List of supported models
-    
     if not context.args:
         await update.message.reply_text(
-            f"Current model: {current_model}\n\n"
+            f"Current main model: {current_model}\n"
+            f"Current error model: {error_model}\n\n"
             "To change the model, use:\n"
-            "/model model_name\n\n"
+            "/model main model_name\n"
+            "/model error model_name\n\n"
             f"Available models:\n{models_list}"
         )
         return
 
-    new_model = context.args[0]
+    if len(context.args) < 2:
+        error_msg = await get_error_message("Please specify model type (main/error) and model name")
+        await update.message.reply_text(error_msg)
+        return
 
-    if new_model not in supported_models:
+    model_type = context.args[0].lower()
+    new_model = context.args[1]
+
+    if new_model not in supported_models and model_type != "add":
         error_msg = await get_error_message(f"Invalid model: {new_model}")
         await update.message.reply_text(error_msg)
         return
 
-    current_model = new_model
-    await update.message.reply_text(f"Model changed to: {current_model}")
+    if model_type == "main":
+        current_model = new_model
+        await update.message.reply_text(f"Main model changed to: {current_model}")
+    elif model_type == "error":
+        error_model = new_model
+        await update.message.reply_text(f"Error model changed to: {error_model}")
+    elif model_type == "add":
+        supported_models.append(new_model)
+        await update.message.reply_text(f"Model added to supported models: {new_model}")
+    else:
+        error_msg = await get_error_message(f"Invalid model type: {model_type}. Use 'main' or 'error'")
+        await update.message.reply_text(error_msg)
 
 async def get_chatgpt_summary(messages):
     """Get a summary of messages using OpenRouter API."""
@@ -205,14 +235,20 @@ async def get_chatgpt_summary(messages):
             model=current_model,  # Use the current model
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that summarizes messages and write summary in Russian. it must not be copy but summary of conversation. Ignore spam. Only meaningfull text, Only topics. If there is mul" +
-                 "tiple topics, separate them;"},
+                 "tiple topics, separate them; if there is no meaningfull text, write 'Ничего полезного'/ "},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=1500,
             temperature=0.7
         )
-        
+        # Check if we got a rate limit error (429)
+        # Check if response has error attribute
+        if hasattr(response, 'error'):
+            msg = f"Error code {response.error['code']}, {response.error['message']}"
+            logger.error(msg)
+            return msg
         return response.choices[0].message.content
+    
     except Exception as e:
         logger.error(f"Error getting AI summary: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
@@ -284,6 +320,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check if the bot is tagged in the message
         if f"@{context.bot.username}" in update.message.text:
             print(f"Bot was tagged in message: {update.message.text}")
+            # Delete the last message from chat history
+            if chat_id in message_history and len(message_history[chat_id]) > 0:
+                message_history[chat_id].pop()
+                print(f"Deleted last message from chat history for chat_id: {chat_id}")
             save_channels()
             try:
                 # Parse the number of messages to show
@@ -318,16 +358,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text(f"Summary of the last {len(messages)} messages by {current_model}:\n\n{summary}")
                         
                         # Also send the individual messages
-                        response = f"Last {len(messages)} messages:\n\n"
-                        for i, msg in enumerate(reversed(messages), 1):
-                            if msg.text:
-                                response += f"{i}. {msg.text}\n\n"
-                            if len(response) > 3000:  # Telegram message length limit
-                                await update.message.reply_text(response)
-                                response = ""
+                        if mode == "debug":
+                            response = f"Last {len(messages)} messages:\n\n"
+                            for i, msg in enumerate(reversed(messages), 1):
+                                if msg.text:
+                                    response += f"{i}. {msg.text}\n\n"
+                                if len(response) > 3000:  # Telegram message length limit
+                                    await update.message.reply_text(response)
+                                    response = ""
                         
-                        if response:
-                            await update.message.reply_text(response)
+                            if response:
+                                await update.message.reply_text(response)
                     else:
                         error_msg = await get_error_message("No previous messages found")
                         await update.message.reply_text(error_msg)
@@ -447,6 +488,7 @@ def main():
 
 if __name__ == '__main__':
     try:
+        startup_check()
         main()
     except KeyboardInterrupt:
         print("Bot stopped by user")
