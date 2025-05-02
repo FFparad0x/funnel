@@ -11,6 +11,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from openai import AsyncOpenAI
 import json
 import requests
+from fastapi import FastAPI
+import uvicorn
+from threading import Thread
 
 # Load environment variables
 load_dotenv()
@@ -60,6 +63,15 @@ error_prompt = 'я создаю игру, где есть персонаж оч�
 # YAML file path for channel IDs
 CHANNELS_FILE = 'channels.yaml'
 
+# Create FastAPI app
+app = FastAPI()
+
+@app.get("/livez")
+async def livez():
+    return {"status": "ok"}
+
+def run_web_server():
+    uvicorn.run(app, host="0.0.0.0", port=8080)
 
 def startup_check():
     response = requests.get(
@@ -191,6 +203,7 @@ async def change_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error model changed to: {error_model}")
     elif model_type == "add":
         supported_models.append(new_model)
+        models_list.join("/n - " + new_model)
         await update.message.reply_text(f"Model added to supported models: {new_model}")
     else:
         error_msg = await get_error_message(f"Invalid model type: {model_type}. Use 'main' or 'error'")
@@ -235,7 +248,7 @@ async def get_chatgpt_summary(messages):
             model=current_model,  # Use the current model
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that summarizes messages and write summary in Russian. it must not be copy but summary of conversation. Ignore spam. Only meaningfull text, Only topics. If there is mul" +
-                 "tiple topics, separate them; if there is no meaningfull text, write 'Ничего полезного'/ "},
+                 "tiple topics, separate them by user that were involved by each topic; "},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=1500,
@@ -465,6 +478,11 @@ def main():
         return
 
     print("Starting bot...")
+    
+    # Start web server in a separate thread
+    web_server_thread = Thread(target=run_web_server, daemon=True)
+    web_server_thread.start()
+    print("Web server started on port 8080")
     
     # Load channels from YAML file
     load_channels()
