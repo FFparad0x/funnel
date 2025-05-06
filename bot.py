@@ -14,9 +14,22 @@ import requests
 from fastapi import FastAPI
 import uvicorn
 from threading import Thread
+import io
+from PIL import Image
 
 # Load environment variables
 load_dotenv()
+
+# Load user mappings
+def load_user_mappings():
+    try:
+        with open('users.json', 'r', encoding='utf-8') as file:
+            return json.load(file)['users']
+    except Exception as e:
+        logger.error(f"Error loading user mappings: {str(e)}")
+        return {}
+
+user_mappings = load_user_mappings()
 
 # Enable logging
 logging.basicConfig(
@@ -38,7 +51,7 @@ models_list = "\n".join(f"- {model}" for model in supported_models)
 # Get bot token and OpenRouter API key from environment variables
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OPENROUTER_API_KEY = os.getenv('OPENAI_API_KEY')
-mode = "info"
+mode = "debug"
 # Initialize OpenAI client with OpenRouter configuration
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
@@ -54,7 +67,7 @@ message_history = {}
 # Store active channels
 active_channels = set()
 # Store current model
-current_model = "qwen/qwen3-235b-a22b:free"  # Default model
+current_model = "bytedance-research/ui-tars-72b:free"  # Default model
 error_model = "mistralai/mistral-small-3.1-24b-instruct:free"  # Default error model
 
 # Here will be used another model with small number of parameters for error message generation
@@ -306,8 +319,10 @@ async def get_error_message(error_context: str) -> str:
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and check if the bot is tagged."""
-    if update.message and update.message.text:
-        chat_id = update.message.chat_id
+    if update.message:
+        chat_id = str(update.message.chat_id)
+        if mode == 'debug' and chat_id not in active_channels:
+            return
         print(f"Received message from chat_id: {chat_id}")
         
         # Initialize message history for this chat if it doesn't exist
@@ -361,7 +376,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 # Get the last N messages
-                if len(message_history[chat_id]) >= 1:
+                if len(message_history[chat_id]) > 0:
                     messages = list(message_history[chat_id])[-n-1:-1]  # -1 to exclude the current message
                     if messages:
                         # Get summary from ChatGPT
@@ -394,30 +409,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 error_msg = await get_error_message(f"Error processing request: {str(e)}")
                 await update.message.reply_text(error_msg)
-
-async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle channel posts."""
-    if update.channel_post and update.channel_post.text:
-        chat_id = update.channel_post.chat_id
-        print(f"Received channel post from chat_id: {chat_id}")
-        
-        # Initialize message history for this chat if it doesn't exist
-        if chat_id not in message_history:
-            message_history[chat_id] = deque(maxlen=500)
-        
-        # Store the channel post
-        message_history[chat_id].append(update.channel_post)
-        
-        # Always add channel and save to file
-        channel_id = str(chat_id)
-        print(f"Channel post detected. Channel ID: {channel_id}")
-        if channel_id and channel_id not in active_channels:
-            print(f"Adding new channel: {channel_id}")
-            active_channels.add(channel_id)
-            save_channels()  # Save to YAML when channel post is detected
-            print(f"Updated active channels: {list(active_channels)}")
-        
-        logger.info(f"Stored message from channel {chat_id}")
 
 async def shutdown(application: Application):
     """Shutdown handler to save channels before exit."""
@@ -479,6 +470,18 @@ def main():
 
     print("Starting bot...")
     
+    # Set up signal handlers
+    def signal_handler(signum, frame):
+        print("stopped")
+        # Save channels before exit
+        save_channels()
+        # Exit the program
+        os._exit(0)
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     # Start web server in a separate thread
     web_server_thread = Thread(target=run_web_server, daemon=True)
     web_server_thread.start()
@@ -494,8 +497,7 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("model", change_model))  # Add new model command handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel_post))
+    application.add_handler(MessageHandler(filters.TEXT | ~filters.COMMAND  | ~filters.REPLY  | ~filters.PHOTO, handle_message))
 
     # Add post initialization handler
     application.post_init = post_init
@@ -509,7 +511,7 @@ if __name__ == '__main__':
         startup_check()
         main()
     except KeyboardInterrupt:
-        print("Bot stopped by user")
+        print("stopped")
         # Save channels before exit
         save_channels()
     except Exception as e:

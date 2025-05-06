@@ -19,4 +19,4 @@ RUN useradd -m botuser && \
 USER botuser
 
 # Command to run the bot
-CMD ["python", "bot.py"] 
+CMD ["python", "src/main.py"] 
