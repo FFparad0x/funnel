@@ -52,15 +52,18 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
         message_texts = []
         for msg in messages:
             # Get username or full name
-            username = None
-            if hasattr(msg, 'from_user'):
+            username = ""
+            if msg.from_user:
                 if msg.from_user.username:
-                    username = f"@{msg.from_user.username}"
+                    username += f"@{msg.from_user.username}"
                 elif msg.effective_name:
-                    username = msg.effective_name
+                    username += msg.effective_name
                 else:
-                    username = msg.from_user.full_name
-            
+                    username += msg.from_user.full_name
+            if msg.forward_from_chat:
+                username += f"from chat {msg.forward_from_chat.effective_name}"
+            if msg.forward_from:
+                username += f"from user {msg.forward_from.username}"
             # Get message text
             text = None
             if hasattr(msg, 'text') and msg.text:
@@ -68,11 +71,11 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
             if hasattr(msg, 'caption') and msg.caption:
                 text = f"Caption: {msg.caption}"
             if hasattr(msg, 'reply_to_message') and msg.reply_to_message:
-                text += f"In response to {msg.reply_to_message.text}"
+                text += f"In response to '{msg.reply_to_message.caption} {msg.reply_to_message.text}'"
             
             if text:
                 # Format message with username if available
-                if username:
+                if username != "":
                     message_texts.append(f"{username}: {text}\n")
                 else:
                     message_texts.append(text+"\n")
