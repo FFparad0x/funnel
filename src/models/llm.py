@@ -29,10 +29,10 @@ def change_prompt(model_type: str, new_prompt: str) -> tuple[bool, str]:
     
     if model_type == "main":
         MAIN_PROMPT = new_prompt
-        return True, f"Main prompt changed to: {new_prompt}"
+        return True, f"Main prompt changed"
     elif model_type == "error":
         ERROR_PROMPT = new_prompt
-        return True, f"Error prompt changed to: {new_prompt}"
+        return True, f"Error prompt changed"
     else:
         return False, f"Invalid model type: {model_type}. Use 'main' or 'error'"
 
@@ -78,6 +78,32 @@ async def get_chatgpt_summary(messages, model=CURRENT_MODEL):
                 {"role": "user", "content": prompt}
             ],
             max_tokens=1500,
+            temperature=0.7
+        )
+        
+        if hasattr(response, 'error'):
+            msg = f"Error code {response.error['code']}, {response.error['message']}"
+            logger.error(msg)
+            return msg
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        logger.error(f"Error getting AI summary: {str(e)}")
+        return "Sorry, I couldn't generate a summary at this time."
+    
+
+async def get_chatgpt_ask(question, model=CURRENT_MODEL):
+    """Get a summary of messages using OpenRouter API."""
+    try:
+        # Prepare messages for ChatGPT
+        # Call OpenRouter API
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "Ты полезный ассистент. Дай чистый ответ на русском, используй разметку для telegram - Markdown. bold text for titles **title**, italic *italic text*, simple text for normal text"},
+                {"role": "user", "content": question}
+            ],
+            max_tokens=15000,
             temperature=0.7
         )
         

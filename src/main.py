@@ -8,7 +8,7 @@ import uvicorn
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from utils.config import TOKEN, MODE, load_channels, save_channels, OPENROUTER_API_KEY, logger
-from handlers.bot_handlers import start, handle_model_command, handle_message, active_channels, handle_prompt_command, help_command
+from handlers.bot_handlers import start, handle_model_command, handle_message, active_channels, handle_prompt_command, help_command, handle_ask_command
 
 # Create FastAPI app
 app = FastAPI()
@@ -100,7 +100,8 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("model", handle_model_command))
     application.add_handler(CommandHandler("prompt", handle_prompt_command))
-    application.add_handler(MessageHandler(filters.TEXT | ~filters.COMMAND | ~filters.REPLY | ~filters.PHOTO, handle_message))
+    application.add_handler(CommandHandler("ask", handle_ask_command))
+    application.add_handler(MessageHandler(filters.TEXT | ~filters.COMMAND | ~filters.REPLY | ~filters.FORWARDED, handle_message))
 
     # Add post initialization handler
     application.post_init = post_init
