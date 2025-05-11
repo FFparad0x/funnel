@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OPENROUTER_API_KEY = os.getenv('OPENAI_API_KEY')
-MODE = "info"
+MODE = "debug"
 CHANNELS_FILE = 'channels.yaml'
 
 # Supported models

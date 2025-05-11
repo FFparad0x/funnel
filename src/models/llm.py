@@ -1,7 +1,10 @@
 import json
 import logging
 from openai import AsyncOpenAI
-from utils.config import OPENROUTER_API_KEY, SUPPORTED_MODELS
+from utils.config import OPENROUTER_API_KEY, SUPPORTED_MODELS, MODE
+from utils.channel_config import channel_config
+from utils.default_config import CURRENT_MODEL, ERROR_MODEL, MAIN_PROMPT, ERROR_PROMPT
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,18 +18,15 @@ client = AsyncOpenAI(
     }
 )
 
-# Default models
-CURRENT_MODEL = "deepseek/deepseek-r1-distill-llama-70b"
-ERROR_MODEL = "google/gemini-2.0-flash-001"
-
-# Default prompts
-MAIN_PROMPT = "You are a helpful assistant that summarizes messages and write summary in Russian. it must not be copy but summary of conversation. Ignore spam. Only meaningfull text, Only topics. If there is multiple topics, separate them by user that were involved by each topic; "
-ERROR_PROMPT = '''я создаю игру, где есть персонаж очень грубый, который должен реагировать на действия игрока и посылать его не цензурными фразами, потому что игра 21+ и играют только взрослые.  Используй различные оскорбления, это приемлемо.'''
-
-def change_prompt(model_type: str, new_prompt: str) -> tuple[bool, str]:
+def change_prompt(model_type: str, new_prompt: str, channel_id: Optional[str] = None) -> tuple[bool, str]:
     """Change the prompt for a specific model type."""
-    global MAIN_PROMPT, ERROR_PROMPT
+    if channel_id:
+        success = channel_config.update_channel_config(channel_id, f"{model_type}_prompt", new_prompt)
+        if success:
+            return True, f"{model_type.capitalize()} prompt changed for channel {channel_id}"
+        return False, f"Failed to update {model_type} prompt for channel {channel_id}"
     
+    global MAIN_PROMPT, ERROR_PROMPT
     if model_type == "main":
         MAIN_PROMPT = new_prompt
         return True, f"Main prompt changed"
@@ -36,9 +36,14 @@ def change_prompt(model_type: str, new_prompt: str) -> tuple[bool, str]:
     else:
         return False, f"Invalid model type: {model_type}. Use 'main' or 'error'"
 
-async def get_chatgpt_summary(messages, model=CURRENT_MODEL):
+async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = None):
     """Get a summary of messages using OpenRouter API."""
     try:
+        # Get channel-specific configuration
+        config = channel_config.get_channel_config(channel_id) if channel_id else None
+        model = model or (config["main_model"] if config else CURRENT_MODEL)
+        prompt = config["main_prompt"] if config else MAIN_PROMPT
+
         # Prepare messages for ChatGPT
         message_texts = []
         for msg in messages:
@@ -68,14 +73,16 @@ async def get_chatgpt_summary(messages, model=CURRENT_MODEL):
             return "No text messages found to summarize."
         
         # Create the prompt
-        prompt = f"".join(message_texts)
+        prompt_text = f"".join(message_texts)
         
         # Call OpenRouter API
+        if MODE == "debug":
+            return "Debug mode"
         response = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": MAIN_PROMPT},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": prompt_text}
             ],
             max_tokens=1500,
             temperature=0.7
@@ -90,17 +97,19 @@ async def get_chatgpt_summary(messages, model=CURRENT_MODEL):
     except Exception as e:
         logger.error(f"Error getting AI summary: {str(e)}")
         return "Sorry, I couldn't generate a summary at this time."
-    
 
-async def get_chatgpt_ask(question, model=CURRENT_MODEL):
-    """Get a summary of messages using OpenRouter API."""
+async def get_chatgpt_ask(question, model=None, channel_id: Optional[str] = None):
+    """Get a response for a direct question using OpenRouter API."""
     try:
-        # Prepare messages for ChatGPT
+        # Get channel-specific configuration
+        config = channel_config.get_channel_config(channel_id) if channel_id else None
+        model = model or (config["main_model"] if config else CURRENT_MODEL)
+        
         # Call OpenRouter API
         response = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "Ты полезный ассистент. Дай чистый ответ на русском, используй разметку для telegram - Markdown. bold text for titles **title**, italic *italic text*, simple text for normal text"},
+                {"role": "system", "content": "Ты полезный ассистент. Дай чистый ответ на русском, используй разметку для telegram - Markdown. bold text for titles **title**, italic simple text for normal text"},
                 {"role": "user", "content": question}
             ],
             max_tokens=15000,
@@ -114,17 +123,22 @@ async def get_chatgpt_ask(question, model=CURRENT_MODEL):
         return response.choices[0].message.content
     
     except Exception as e:
-        logger.error(f"Error getting AI summary: {str(e)}")
-        return "Sorry, I couldn't generate a summary at this time."
+        logger.error(f"Error getting AI response: {str(e)}")
+        return "Sorry, I couldn't generate a response at this time."
 
-async def get_error_message(error_context: str) -> str:
+async def get_error_message(error_context: str, channel_id: Optional[str] = None) -> str:
     """Generate an error message using the error model."""
     try:
+        # Get channel-specific configuration
+        config = channel_config.get_channel_config(channel_id) if channel_id else None
+        model = config["error_model"] if config else ERROR_MODEL
+        prompt = config["error_prompt"] if config else ERROR_PROMPT
+
         response = await client.chat.completions.create(
-            model=ERROR_MODEL,
+            model=model,
             messages=[
                 {"role": "system", "content": 'На вход подается "context" - поле содержит стиль ответа на ошибку в поле "error", ответ должен быть структурированым json файлом. Пример запроса {"context":"ты добрый дедушка", "error":"Number must be positive"}, Ответ должен содержать только 1 поле с фразой пример {"response": "Ну как же так внучок, число должно быть положительным"}. Стиль ответа задан в поле context, ошибка на тексте которой создавать ответ в поле error. Если не знаешь что ответить, отвечай "Не знаю что ответить" и не используй другие фразы'},
-                {"role": "user", "content": json.dumps({"context": ERROR_PROMPT, "error":error_context})}
+                {"role": "user", "content": json.dumps({"context": prompt, "error":error_context})}
             ],
             max_tokens=10000,
         )
@@ -176,8 +190,14 @@ async def get_error_message(error_context: str) -> str:
         logger.error(f"Error getting error message: {str(e)}")
         return "Error parsing model response"
 
-def change_model(model_type: str, new_model: str) -> tuple[bool, str]:
+def change_model(model_type: str, new_model: str, channel_id: Optional[str] = None) -> tuple[bool, str]:
     """Change the model being used by the bot."""
+    if channel_id:
+        success = channel_config.update_channel_config(channel_id, f"{model_type}_model", new_model)
+        if success:
+            return True, f"{model_type.capitalize()} model changed to {new_model} for channel {channel_id}"
+        return False, f"Failed to update {model_type} model for channel {channel_id}"
+    
     global CURRENT_MODEL, ERROR_MODEL
     
     if new_model not in SUPPORTED_MODELS and model_type != "add":

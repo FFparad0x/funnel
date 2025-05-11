@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from models.llm import get_chatgpt_summary, get_error_message, change_model, CURRENT_MODEL, ERROR_MODEL, change_prompt, get_chatgpt_ask
 from utils.config import MODE, SUPPORTED_MODELS
+from utils.channel_config import channel_config
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +30,19 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
     """Handle the /model command to change models."""
     # Check if the user is the admin
     if not update.message.from_user.username or update.message.from_user.username.lower() != "fparadox":
-        error_msg = await get_error_message("Unauthorized model change attempt")
+        error_msg = await get_error_message("Unauthorized model change attempt", str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown')
         return
 
     # List of supported models
     if not context.args:
         models_list = "\n".join(f"- `{model}`" for model in SUPPORTED_MODELS)
+        channel_id = str(update.message.chat_id)
+        config = channel_config.get_channel_config(channel_id)
         await update.message.reply_text(
-            f"*Current Settings:*\n"
-            f"Main Model: `{CURRENT_MODEL}`\n"
-            f"Error Model: `{ERROR_MODEL}`\n\n"
+            f"*Current Settings for Channel {channel_id}:*\n"
+            f"Main Model: `{config['main_model']}`\n"
+            f"Error Model: `{config['error_model']}`\n\n"
             "*To change the model, use:*\n"
             "/model main model_name\n"
             "/model error model_name\n\n"
@@ -49,16 +52,17 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if len(context.args) < 2:
-        error_msg = await get_error_message("Please specify model type (main/error) and model name")
+        error_msg = await get_error_message("Please specify model type (main/error) and model name", str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown')
         return
 
     model_type = context.args[0].lower()
     new_model = context.args[1]
+    channel_id = context.args[2] if len(context.args) > 2 else str(update.message.chat_id)
 
-    success, message = change_model(model_type, new_model)
+    success, message = change_model(model_type, new_model, channel_id)
     if not success:
-        error_msg = await get_error_message(message)
+        error_msg = await get_error_message(message, str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown')
     else:
         await update.message.reply_text(f"`{message}`", parse_mode='Markdown')
@@ -67,25 +71,36 @@ async def handle_prompt_command(update: Update, context: ContextTypes.DEFAULT_TY
     """Handle the /prompt command to change prompts."""
     # Check if the user is the admin
     if not update.message.from_user.username or update.message.from_user.username.lower() != "fparadox":
-        error_msg = await get_error_message("Unauthorized prompt change attempt")
+        error_msg = await get_error_message("Unauthorized prompt change attempt", str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown')
         return
 
     if not context.args or len(context.args) < 2:
+        channel_id = str(update.message.chat_id)
+        config = channel_config.get_channel_config(channel_id)
         await update.message.reply_text(
+            f"*Current Prompts for Channel {channel_id}:*\n"
+            f"Main Prompt: `{config['main_prompt']}`\n"
+            f"Error Prompt: `{config['error_prompt']}`\n\n"
             "*To change the prompt, use:*\n"
             "/prompt main your new prompt\n"
-            "/prompt error your new prompt",
+            "/prompt error your new prompt\n",
             parse_mode='Markdown'
         )
         return
 
     model_type = context.args[0].lower()
-    new_prompt = " ".join(context.args[1:])  # Join all remaining arguments as the prompt
+    # Check if the last argument is a channel ID
+    if context.args[-1].isdigit():
+        channel_id = context.args[-1]
+        new_prompt = " ".join(context.args[1:-1])
+    else:
+        channel_id = str(update.message.chat_id)
+        new_prompt = " ".join(context.args[1:])
 
-    success, message = change_prompt(model_type, new_prompt)
+    success, message = change_prompt(model_type, new_prompt, channel_id)
     if not success:
-        error_msg = await get_error_message(message)
+        error_msg = await get_error_message(message, str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown')
     else:
         await update.message.reply_text(f"`{message}`", parse_mode='Markdown')
@@ -123,38 +138,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if len(parts) > 1:
                         n = int(parts[1])
                         if n <= 0:
-                            error_msg = await get_error_message("Number must be positive")
+                            error_msg = await get_error_message("Number must be positive", chat_id)
                             await update.message.reply_text(error_msg, parse_mode='Markdown')
                             return
                         if n > 500:
-                            error_msg = await get_error_message("User is too greedy, must be less than 500")
+                            error_msg = await get_error_message("User is too greedy, must be less than 500", chat_id)
                             await update.message.reply_text(error_msg, parse_mode='Markdown')
                             return
                     else:
+                        if n > len(message_history[chat_id]):
+                            n = len(message_history[chat_id])-1
                         n = 1  # Default to 1 message if no number provided
                 except ValueError:
-                    error_msg = await get_error_message("Invalid number format")
+                    error_msg = await get_error_message("Invalid number format", chat_id)
                     await update.message.reply_text(error_msg, parse_mode='Markdown')
                     return
 
                 # Get the last N messages
                 if len(message_history[chat_id]) > 0:
                     m2 = list(message_history[chat_id])
-                    messages = list(message_history[chat_id])[:-n]  # -1 to exclude the current message
+                    messages = m2[-n:]  # Get the last n messages
                     if messages:
-                        # Get summary from ChatGPT
-                        summary = await get_chatgpt_summary(messages)
+                        # Get summary from ChatGPT using channel-specific configuration
+                        summary = await get_chatgpt_summary(messages, channel_id=chat_id)
                         
                         # Send the summary
                         await update.message.reply_text(
-                            f"*Summary of the last {len(messages)} messages by {CURRENT_MODEL}:*\n\n{summary}",
+                            f"*Summary of the last {len(messages)} messages:*\n\n{summary}",
                             parse_mode='Markdown'
                         )
                         
                         # Also send the individual messages
                         if MODE == "debug":
                             response = f"*Last {len(messages)} messages:*\n\n"
-                            for i, msg in enumerate(reversed(messages), 1):
+                            for i, msg in enumerate(messages, 1):
                                 if msg.text:
                                     response += f"{i}. `{msg.text}`\n\n"
                                 if len(response) > 3000:  # Telegram message length limit
@@ -164,15 +181,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if response:
                                 await update.message.reply_text(response, parse_mode='Markdown')
                     else:
-                        error_msg = await get_error_message("No previous messages found")
+                        error_msg = await get_error_message("No previous messages found", chat_id)
                         await update.message.reply_text(error_msg, parse_mode='Markdown')
                 else:
-                    error_msg = await get_error_message("No previous messages found")
+                    error_msg = await get_error_message("No previous messages found", chat_id)
                     await update.message.reply_text(error_msg, parse_mode='Markdown')
                     
             except Exception as e:
                 logger.error(f"Error fetching messages: {str(e)}")
-                error_msg = await get_error_message(f"Error processing request: {str(e)}")
+                error_msg = await get_error_message(f"Error processing request: {str(e)}", chat_id)
                 await update.message.reply_text(error_msg, parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,20 +244,15 @@ async def handle_ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         if question == "":
-            error_msg = await get_error_message("Wrong request, no question provided'")
+            error_msg = await get_error_message("Wrong request, no question provided", str(update.message.chat_id))
             await update.message.reply_text(error_msg, parse_mode='Markdown')
             return
-        # Call the model with the question
-        response = await get_chatgpt_ask(question)
-        
-        if hasattr(response, 'error'):
-            error_msg = await get_error_message(f"Error code {response.error['code']}, {response.error['message']}")
-            await update.message.reply_text(error_msg, parse_mode='Markdown')
-            return
-            
+
+        # Get response using channel-specific configuration
+        response = await get_chatgpt_ask(question, channel_id=str(update.message.chat_id))
         await update.message.reply_text(response, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error processing ask command: {str(e)}")
-        error_msg = await get_error_message(f"Error processing request: {str(e)}")
+        error_msg = await get_error_message(f"Error processing request: {str(e)}", str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown') 
