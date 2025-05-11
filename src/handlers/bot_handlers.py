@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 from models.llm import get_chatgpt_summary, get_error_message, change_model, CURRENT_MODEL, ERROR_MODEL, change_prompt, get_chatgpt_ask
 from utils.config import MODE, SUPPORTED_MODELS
 from utils.channel_config import channel_config
+from utils.stats import request_stats
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +37,15 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # List of supported models
     if not context.args:
-        models_list = "\n".join(f"- `{model}`" for model in SUPPORTED_MODELS)
         channel_id = str(update.message.chat_id)
         config = channel_config.get_channel_config(channel_id)
         await update.message.reply_text(
             f"*Current Settings for Channel {channel_id}:*\n"
-            f"Main Model: `{config['main_model']}`\n"
-            f"Error Model: `{config['error_model']}`\n\n"
+            f"Main Model: {config['main_model']}\n"
+            f"Error Model: {config['error_model']}\n\n"
             "*To change the model, use:*\n"
             "/model main model_name\n"
-            "/model error model_name\n\n"
-            f"*Available models:*\n{models_list}",
+            "/model error model_name\n\n",
             parse_mode='Markdown'
         )
         return
@@ -174,6 +173,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             for i, msg in enumerate(messages, 1):
                                 if msg.text:
                                     response += f"{i}. `{msg.text}`\n\n"
+                                if msg.caption:
+                                    response += f"{i}. `{msg.caption}`\n\n"
                                 if len(response) > 3000:  # Telegram message length limit
                                     await update.message.reply_text(response, parse_mode='Markdown')
                                     response = ""
@@ -255,4 +256,38 @@ async def handle_ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error processing ask command: {str(e)}")
         error_msg = await get_error_message(f"Error processing request: {str(e)}", str(update.message.chat_id))
-        await update.message.reply_text(error_msg, parse_mode='Markdown') 
+        await update.message.reply_text(error_msg, parse_mode='Markdown')
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the /status command to show current configuration and statistics."""
+    # Check if the user is the admin
+    if not update.message.from_user.username or update.message.from_user.username.lower() != "fparadox":
+        error_msg = await get_error_message("Unauthorized status check attempt", str(update.message.chat_id))
+        await update.message.reply_text(error_msg, parse_mode='Markdown')
+        return
+
+    channel_id = str(update.message.chat_id)
+    config = channel_config.get_channel_config(channel_id)
+    stats = request_stats.get_stats()
+
+    # Get current channel stats
+    total_requests = stats["channel_requests"].get(channel_id, 0)
+    ask_requests = stats["ask_requests"].get(channel_id, 0)
+
+    status_text = f"""*Bot Status Report for Channel {channel_id}*
+
+*Current Configuration:*
+Main Model: `{config['main_model']}`
+Error Model: `{config['error_model']}`
+Main Prompt: `{config['main_prompt'][:100]}...`
+Error Prompt: `{config['error_prompt'][:100]}...`
+
+*Request Statistics:*
+Total Requests: `{total_requests}`
+/ask Commands: `{ask_requests}`
+Summary Requests: `{total_requests - ask_requests}`
+
+*Mode:* `{MODE}`
+"""
+
+    await update.message.reply_text(status_text, parse_mode='Markdown') 

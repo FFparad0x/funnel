@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 from utils.config import OPENROUTER_API_KEY, SUPPORTED_MODELS, MODE
 from utils.channel_config import channel_config
 from utils.default_config import CURRENT_MODEL, ERROR_MODEL, MAIN_PROMPT, ERROR_PROMPT
+from utils.stats import request_stats
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,9 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
         model = model or (config["main_model"] if config else CURRENT_MODEL)
         prompt = config["main_prompt"] if config else MAIN_PROMPT
 
+        # Track request
+        request_stats.increment(channel_id or "default")
+
         # Prepare messages for ChatGPT
         message_texts = []
         for msg in messages:
@@ -52,6 +56,8 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
             if hasattr(msg, 'from_user'):
                 if msg.from_user.username:
                     username = f"@{msg.from_user.username}"
+                elif msg.effective_name:
+                    username = msg.effective_name
                 else:
                     username = msg.from_user.full_name
             
@@ -59,8 +65,10 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
             text = None
             if hasattr(msg, 'text') and msg.text:
                 text = msg.text
-            elif hasattr(msg, 'caption') and msg.caption:
-                text = msg.caption
+            if hasattr(msg, 'caption') and msg.caption:
+                text = f"Caption: {msg.caption}"
+            if hasattr(msg, 'reply_to_message') and msg.reply_to_message:
+                text += f"In response to {msg.reply_to_message.text}"
             
             if text:
                 # Format message with username if available
@@ -84,8 +92,8 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": prompt_text}
             ],
-            max_tokens=1500,
-            temperature=0.7
+            max_tokens=15000,
+            temperature=0.5
         )
         
         if hasattr(response, 'error'):
@@ -105,6 +113,9 @@ async def get_chatgpt_ask(question, model=None, channel_id: Optional[str] = None
         config = channel_config.get_channel_config(channel_id) if channel_id else None
         model = model or (config["main_model"] if config else CURRENT_MODEL)
         
+        # Track request
+        request_stats.increment(channel_id or "default", is_ask=True)
+
         # Call OpenRouter API
         response = await client.chat.completions.create(
             model=model,
@@ -133,6 +144,9 @@ async def get_error_message(error_context: str, channel_id: Optional[str] = None
         config = channel_config.get_channel_config(channel_id) if channel_id else None
         model = config["error_model"] if config else ERROR_MODEL
         prompt = config["error_prompt"] if config else ERROR_PROMPT
+
+        # Track request
+        request_stats.increment(channel_id or "default")
 
         response = await client.chat.completions.create(
             model=model,
