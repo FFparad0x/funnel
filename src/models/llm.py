@@ -65,15 +65,14 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
             if msg.forward_from:
                 username += f"from user {msg.forward_from.username}"
             # Get message text
-            text = None
+            text = ""
             if hasattr(msg, 'text') and msg.text:
-                text = msg.text
+                text += msg.text
             if hasattr(msg, 'caption') and msg.caption:
-                text = f"Caption: {msg.caption}"
+                text += f"Caption: {msg.caption}"
             if hasattr(msg, 'reply_to_message') and msg.reply_to_message:
                 text += f"In response to '{msg.reply_to_message.caption} {msg.reply_to_message.text}'"
-            
-            if text:
+            if text == "":
                 # Format message with username if available
                 if username != "":
                     message_texts.append(f"{username}: {text}\n")
