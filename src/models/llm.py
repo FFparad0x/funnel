@@ -72,7 +72,7 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
                 text += f" Caption: {msg.caption}"
             if hasattr(msg, 'reply_to_message') and msg.reply_to_message:
                 text += f" In response to '{msg.reply_to_message.caption} {msg.reply_to_message.text}'"
-            if text == "":
+            if text != "":
                 # Format message with username if available
                 if username != "":
                     message_texts.append(f"{username}: {text}\n")
