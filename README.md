@@ -2,6 +2,10 @@
 
 This bot reads messages from a specified Telegram channel and responds with the last 100 messages when tagged.
 
+## Important note 
+
+Created via vibeconding; do not use
+
 ## Setup
 
 1. Create a new bot using [@BotFather](https://t.me/botfather) on Telegram and get your bot token.
