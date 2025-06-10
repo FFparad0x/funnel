@@ -1,7 +1,7 @@
 import json
 import os
 from typing import Dict, Optional
-from utils.default_config import CURRENT_MODEL, ERROR_MODEL, MAIN_PROMPT, ERROR_PROMPT
+from utils.default_config import CURRENT_MODEL, ERROR_MODEL, MAIN_PROMPT, ERROR_PROMPT, TEMPERATURE
 
 class ChannelConfig:
     def __init__(self):
@@ -10,7 +10,8 @@ class ChannelConfig:
             "main_model": CURRENT_MODEL,
             "error_model": ERROR_MODEL,
             "main_prompt": MAIN_PROMPT,
-            "error_prompt": ERROR_PROMPT
+            "error_prompt": ERROR_PROMPT,
+            "temp_model": float(TEMPERATURE),
         }
         self.channel_configs: Dict[str, dict] = {}
         self.load_configs()
@@ -43,7 +44,7 @@ class ChannelConfig:
         if channel_id not in self.channel_configs:
             self.channel_configs[channel_id] = self.default_config.copy()
 
-        if config_type in ["main_model", "error_model", "main_prompt", "error_prompt"]:
+        if config_type in ["main_model", "error_model", "main_prompt", "error_prompt","temp_model"]:
             self.channel_configs[channel_id][config_type] = value
             self.save_configs()
             return True

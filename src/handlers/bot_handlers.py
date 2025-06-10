@@ -29,11 +29,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /model command to change models."""
-    # Check if the user is the admin
-    if not update.message.from_user.username or update.message.from_user.username.lower() != "fparadox":
-        error_msg = await get_error_message("Unauthorized model change attempt", str(update.message.chat_id))
+
+
+    # List of supported models
+    if not context.args:
+        channel_id = str(update.message.chat_id)
+        config = channel_config.get_channel_config(channel_id)
+        await update.message.reply_text(
+            f'''
+<b>Current Settings for Channel {channel_id}:</b>
+Main Model: {config['main_model']}
+Error Model: {config['error_model']}
+Current Temperature: {config['temp_model']}
+<b>To change the model, use:</b>
+/model main model_name
+/model error model_name
+or /model temp new_temp
+            '''
+            ,
+            parse_mode='HTML'
+        )
+        return
+
+    if len(context.args) < 2:
+        error_msg = await get_error_message("Please specify model type (main/error) and model name", str(update.message.chat_id))
         await update.message.reply_text(error_msg, parse_mode='Markdown')
         return
+
+    model_type = context.args[0].lower()
+    new_model = context.args[1]
+    channel_id = context.args[2] if len(context.args) > 2 else str(update.message.chat_id)
+
+    success, message = change_model(model_type, new_model, channel_id)
+    if not success:
+        error_msg = await get_error_message(message, str(update.message.chat_id))
+        await update.message.reply_text(error_msg, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(f"`{message}`", parse_mode='Markdown')
+
+async def handle_temp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the /temp command to change models."""
+    # Check if the user is the admin
 
     # List of supported models
     if not context.args:
@@ -42,10 +78,12 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(
             f"*Current Settings for Channel {channel_id}:*\n"
             f"Main Model: {config['main_model']}\n"
-            f"Error Model: {config['error_model']}\n\n"
+            f"Error Model: {config['error_model']}\n"
+            f"Current Temperature: {config['temperature']}\n"
             "*To change the model, use:*\n"
             "/model main model_name\n"
-            "/model error model_name\n\n",
+            "/model error model_name\n"
+            "or /model temp <new_temp>\n",
             parse_mode='Markdown'
         )
         return
@@ -66,13 +104,10 @@ async def handle_model_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text(f"`{message}`", parse_mode='Markdown')
 
+
 async def handle_prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /prompt command to change prompts."""
     # Check if the user is the admin
-    if not update.message.from_user.username or update.message.from_user.username.lower() != "fparadox":
-        error_msg = await get_error_message("Unauthorized prompt change attempt", str(update.message.chat_id))
-        await update.message.reply_text(error_msg, parse_mode='Markdown')
-        return
 
     if not context.args or len(context.args) < 2:
         channel_id = str(update.message.chat_id)
@@ -147,7 +182,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         if n > len(message_history[chat_id]):
                             n = len(message_history[chat_id])-1
-                        n = 1  # Default to 1 message if no number provided
                 except ValueError:
                     error_msg = await get_error_message("Invalid number format", chat_id)
                     await update.message.reply_text(error_msg, parse_mode='Markdown')
@@ -163,8 +197,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         # Send the summary
                         await update.message.reply_text(
-                            f"*Summary of the last {len(messages)} messages:*\n\n{summary}",
-                            parse_mode='Markdown'
+                            f"Summary of the last {len(messages)} messages:\n <blockquote expandable> {summary}</blockquote>",
+                           parse_mode='HTML'
                         )
                         
                         # Also send the individual messages

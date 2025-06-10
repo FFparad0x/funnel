@@ -3,9 +3,10 @@ import logging
 from openai import AsyncOpenAI
 from utils.config import OPENROUTER_API_KEY, SUPPORTED_MODELS, MODE
 from utils.channel_config import channel_config
-from utils.default_config import CURRENT_MODEL, ERROR_MODEL, MAIN_PROMPT, ERROR_PROMPT
+from utils.default_config import CURRENT_MODEL, ERROR_MODEL, MAIN_PROMPT, ERROR_PROMPT, TEMPERATURE
 from utils.stats import request_stats
 from typing import Optional
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
         config = channel_config.get_channel_config(channel_id) if channel_id else None
         model = model or (config["main_model"] if config else CURRENT_MODEL)
         prompt = config["main_prompt"] if config else MAIN_PROMPT
-
+        temp = config["temp_model"] if config else TEMPERATURE
         # Track request
         request_stats.increment(channel_id or "default")
 
@@ -91,22 +92,33 @@ async def get_chatgpt_summary(messages, model=None, channel_id: Optional[str] = 
         response = await client.chat.completions.create(
             model=model,
             messages=[
+                {"role": "system", "content": "Use htlm, allowed tags: <b> for bold,<i> for italic,<u> for underline,<s>for strikethrough,<a> for links,<blockquote> for quotes. Every other tag and markdown style are not allowed"},
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": prompt_text}
             ],
             max_tokens=15000,
-            temperature=0.5
+            temperature=float(temp)
         )
         
         if hasattr(response, 'error'):
             msg = f"Error code {response.error['code']}, {response.error['message']}"
             logger.error(msg)
             return msg
-        return response.choices[0].message.content
-    
+        return  remove_all_except_specified_tags(response.choices[0].message.content)
+
     except Exception as e:
         logger.error(f"Error getting AI summary: {str(e)}")
         return "Sorry, I couldn't generate a summary at this time."
+def remove_all_except_specified_tags(text):
+    """Remove all HTML tags except <b>, <i>, <u>, <s>, <a>, and <blockquote> with all their attributes."""
+    # Pattern matches any HTML tag that is NOT in our allowed list
+    pattern = re.compile(
+        r'''<(?!\/?(b|i|u|s|a|blockquote)\b)[^>]+>''',
+        flags=re.IGNORECASE
+    )
+    clean_text = pattern.sub('', text)
+    return clean_text
+
 
 async def get_chatgpt_ask(question, model=None, channel_id: Optional[str] = None):
     """Get a response for a direct question using OpenRouter API."""
